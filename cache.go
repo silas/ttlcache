@@ -3,11 +3,10 @@ package ttlcache
 import (
 	"container/list"
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
+	"resenje.org/singleflight"
 )
 
 // Available eviction reasons.
@@ -238,7 +237,7 @@ func (c *Cache[K, V]) evict(reason EvictionReason, elems ...*list.Element) {
 // Set creates a new item from the provided key and value, adds
 // it to the cache and then returns it. If an item associated with the
 // provided key already exists, the new item overwrites the existing one.
-func (c *Cache[K, V]) Set(key K, value V, ttl time.Duration) *Item[K, V] {
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, ttl time.Duration) *Item[K, V] {
 	c.items.mu.Lock()
 	defer c.items.mu.Unlock()
 
@@ -249,7 +248,7 @@ func (c *Cache[K, V]) Set(key K, value V, ttl time.Duration) *Item[K, V] {
 // Unless this is disabled, it also extends/touches an item's
 // expiration timestamp on successful retrieval.
 // If the item is not found, a nil value is returned.
-func (c *Cache[K, V]) Get(key K, opts ...Option[K, V]) *Item[K, V] {
+func (c *Cache[K, V]) Get(ctx context.Context, key K, opts ...Option[K, V]) *Item[K, V] {
 	getOpts := options[K, V]{
 		loader:            c.options.loader,
 		disableTouchOnHit: c.options.disableTouchOnHit,
@@ -267,7 +266,7 @@ func (c *Cache[K, V]) Get(key K, opts ...Option[K, V]) *Item[K, V] {
 		c.metricsMu.Unlock()
 
 		if getOpts.loader != nil {
-			return getOpts.loader.Load(c, key)
+			return getOpts.loader.Load(ctx, c, key)
 		}
 
 		return nil
@@ -282,7 +281,7 @@ func (c *Cache[K, V]) Get(key K, opts ...Option[K, V]) *Item[K, V] {
 
 // Delete deletes an item from the cache. If the item associated with
 // the key is not found, the method is no-op.
-func (c *Cache[K, V]) Delete(key K) {
+func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	c.items.mu.Lock()
 	defer c.items.mu.Unlock()
 
@@ -295,14 +294,14 @@ func (c *Cache[K, V]) Delete(key K) {
 }
 
 // DeleteAll deletes all items from the cache.
-func (c *Cache[K, V]) DeleteAll() {
+func (c *Cache[K, V]) DeleteAll(ctx context.Context) {
 	c.items.mu.Lock()
 	c.evict(EvictionReasonDeleted)
 	c.items.mu.Unlock()
 }
 
 // DeleteExpired deletes all expired items from the cache.
-func (c *Cache[K, V]) DeleteExpired() {
+func (c *Cache[K, V]) DeleteExpired(ctx context.Context) {
 	c.items.mu.Lock()
 	defer c.items.mu.Unlock()
 
@@ -326,7 +325,7 @@ func (c *Cache[K, V]) DeleteExpired() {
 // Touch simulates an item's retrieval without actually returning it.
 // Its main purpose is to extend an item's expiration timestamp.
 // If the item is not found, the method is no-op.
-func (c *Cache[K, V]) Touch(key K) {
+func (c *Cache[K, V]) Touch(ctx context.Context, key K) {
 	c.items.mu.Lock()
 	c.get(key, true)
 	c.items.mu.Unlock()
@@ -381,7 +380,7 @@ func (c *Cache[K, V]) Metrics() Metrics {
 // Start starts an automatic cleanup process that
 // periodically deletes expired items.
 // It blocks until Stop is called.
-func (c *Cache[K, V]) Start() {
+func (c *Cache[K, V]) Start(ctx context.Context) {
 	waitDur := func() time.Duration {
 		c.items.mu.RLock()
 		defer c.items.mu.RUnlock()
@@ -425,7 +424,7 @@ func (c *Cache[K, V]) Start() {
 			stop()
 			timer.Reset(d)
 		case <-timer.C:
-			c.DeleteExpired()
+			c.DeleteExpired(ctx)
 			stop()
 			timer.Reset(waitDur())
 		}
@@ -434,7 +433,7 @@ func (c *Cache[K, V]) Start() {
 
 // Stop stops the automatic cleanup process.
 // It blocks until the cleanup process exits.
-func (c *Cache[K, V]) Stop() {
+func (c *Cache[K, V]) Stop(ctx context.Context) {
 	c.stopCh <- struct{}{}
 }
 
@@ -521,26 +520,35 @@ type Loader[K comparable, V any] interface {
 	// It should return nil if the item is not found/valid.
 	// The method is allowed to fetch data from the cache instance
 	// or update it for future use.
-	Load(c *Cache[K, V], key K) *Item[K, V]
+	Load(ctx context.Context, c *Cache[K, V], key K) *Item[K, V]
 }
 
 // LoaderFunc type is an adapter that allows the use of ordinary
 // functions as data loaders.
-type LoaderFunc[K comparable, V any] func(*Cache[K, V], K) *Item[K, V]
+type LoaderFunc[K comparable, V any] func(context.Context, *Cache[K, V], K) *Item[K, V]
 
 // Load executes a custom item retrieval logic and returns the item that
 // is associated with the key.
 // It returns nil if the item is not found/valid.
-func (l LoaderFunc[K, V]) Load(c *Cache[K, V], key K) *Item[K, V] {
-	return l(c, key)
+func (l LoaderFunc[K, V]) Load(ctx context.Context, c *Cache[K, V], key K) *Item[K, V] {
+	return l(ctx, c, key)
 }
 
-// SuppressedLoader wraps another Loader and suppresses duplicate
+// SingleFlightLoader wraps another Loader and suppresses duplicate
 // calls to its Load method.
-type SuppressedLoader[K comparable, V any] struct {
+func SingleFlightLoader[K comparable, V any](loader Loader[K, V]) Loader[K, V] {
+	return &singleFlightLoader[K, V]{
+		Loader: loader,
+		group:  &singleflight.Group[K, *Item[K, V]]{},
+	}
+}
+
+// singleFlightLoader wraps another Loader and suppresses duplicate
+// calls to its Load method.
+type singleFlightLoader[K comparable, V any] struct {
 	Loader[K, V]
 
-	group *singleflight.Group
+	group *singleflight.Group[K, *Item[K, V]]
 }
 
 // Load executes a custom item retrieval logic and returns the item that
@@ -548,27 +556,13 @@ type SuppressedLoader[K comparable, V any] struct {
 // It returns nil if the item is not found/valid.
 // It also ensures that only one execution of the wrapped Loader's Load
 // method is in-flight for a given key at a time.
-func (l *SuppressedLoader[K, V]) Load(c *Cache[K, V], key K) *Item[K, V] {
-	// there should be a better/generic way to create a
-	// singleflight Group's key. It's possible that a generic
-	// singleflight.Group will be introduced with/in go1.19+
-	strKey := fmt.Sprint(key)
-
+func (l *singleFlightLoader[K, V]) Load(ctx context.Context, c *Cache[K, V], key K) *Item[K, V] {
 	// the error can be discarded since the singleflight.Group
 	// itself does not return any of its errors, it returns
 	// the error that we return ourselves in the func below, which
 	// is also nil
-	res, _, _ := l.group.Do(strKey, func() (interface{}, error) {
-		item := l.Loader.Load(c, key)
-		if item == nil {
-			return nil, nil
-		}
-
-		return item, nil
+	res, _, _ := l.group.Do(ctx, key, func(ctx context.Context) (*Item[K, V], error) {
+		return l.Loader.Load(ctx, c, key), nil
 	})
-	if res == nil {
-		return nil
-	}
-
-	return res.(*Item[K, V])
+	return res
 }

@@ -1,16 +1,14 @@
 # TTLCache - an in-memory cache with item expiration
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/jellydator/ttlcache/v3.svg)](https://pkg.go.dev/github.com/jellydator/ttlcache/v3)
-[![Build Status](https://github.com/jellydator/ttlcache/actions/workflows/go.yml/badge.svg)](https://github.com/jellydator/ttlcache/actions/workflows/go.yml)
-[![Coverage Status](https://coveralls.io/repos/github/jellydator/ttlcache/badge.svg?branch=master)](https://coveralls.io/github/jellydator/ttlcache?branch=master)
-[![Go Report Card](https://goreportcard.com/badge/github.com/jellydator/ttlcache/v3)](https://goreportcard.com/report/github.com/jellydator/ttlcache/v3)
+This is a friendly fork of [jellydator/ttlcache](https://github.com/jellydator/ttlcache),
+which adds context support and a context aware singleflight implementation.
 
 ## Features
 - Simple API.
 - Type parameters.
 - Item expiration and automatic deletion.
 - Automatic expiration time extension on each `Get` call.
-- `Loader` interface that is used to load/lazily initialize missing cache 
+- `Loader` interface that is used to load/lazily initialize missing cache
 items.
 - Subscription to cache events (insertion and eviction).
 - Metrics.
@@ -18,14 +16,14 @@ items.
 
 ## Installation
 ```
-go get github.com/jellydator/ttlcache/v3
+go get github.com/silas/ttlcache
 ```
 
 ## Usage
-The main type of `ttlcache` is `Cache`. It represents a single 
+The main type of `ttlcache` is `Cache`. It represents a single
 in-memory data store.
 
-To create a new instance of `ttlcache.Cache`, the `ttlcache.New()` function 
+To create a new instance of `ttlcache.Cache`, the `ttlcache.New()` function
 should be called:
 ```go
 func main() {
@@ -35,25 +33,25 @@ func main() {
 
 Note that by default, a new cache instance does not let any of its
 items to expire or be automatically deleted. However, this feature
-can be activated by passing a few additional options into the 
-`ttlcache.New()` function and calling the `cache.Start()` method:
+can be activated by passing a few additional options into the
+`ttlcache.New()` function and calling the `cache.Start(ctx)` method:
 ```go
 func main() {
 	cache := ttlcache.New[string, string](
 		ttlcache.WithTTL[string, string](30 * time.Minute),
 	)
 
-	go cache.Start() // starts automatic expired item deletion
+	go cache.Start(context.Background()) // starts automatic expired item deletion
 }
 ```
 
-Even though the `cache.Start()` method handles expired item deletion well,
-there may be times when the system that uses `ttlcache` needs to determine 
-when to delete the expired items itself. For example, it may need to 
-delete them only when the resource load is at its lowest (e.g., after 
-midnight, when the number of users/HTTP requests drops). So, in situations 
-like these, instead of calling `cache.Start()`, the system could 
-periodically call `cache.DeleteExpired()`:
+Even though the `cache.Start(ctx)` method handles expired item deletion well,
+there may be times when the system that uses `ttlcache` needs to determine
+when to delete the expired items itself. For example, it may need to
+delete them only when the resource load is at its lowest (e.g., after
+midnight, when the number of users/HTTP requests drops). So, in situations
+like these, instead of calling `cache.Start(ctx)`, the system could
+periodically call `cache.DeleteExpired(ctx)`:
 ```go
 func main() {
 	cache := ttlcache.New[string, string](
@@ -62,36 +60,37 @@ func main() {
 
 	for {
 		time.Sleep(4 * time.Hour)
-		cache.DeleteExpired()
+		cache.DeleteExpired(context.Background())
 	}
 }
 ```
 
-The data stored in `ttlcache.Cache` can be retrieved and updated with 
+The data stored in `ttlcache.Cache` can be retrieved and updated with
 `Set`, `Get`, `Delete`, etc. methods:
 ```go
 func main() {
 	cache := ttlcache.New[string, string](
 		ttlcache.WithTTL[string, string](30 * time.Minute),
 	)
+	ctx := context.Background()
 
 	// insert data
-	cache.Set("first", "value1", ttlcache.DefaultTTL)
-	cache.Set("second", "value2", ttlcache.NoTTL)
-	cache.Set("third", "value3", ttlcache.DefaultTTL)
+	cache.Set(ctx, "first", "value1", ttlcache.DefaultTTL)
+	cache.Set(ctx, "second", "value2", ttlcache.NoTTL)
+	cache.Set(ctx, "third", "value3", ttlcache.DefaultTTL)
 
 	// retrieve data
-	item := cache.Get("first")
+	item := cache.Get(ctx, "first")
 	fmt.Println(item.Value(), item.ExpiresAt())
 
 	// delete data
-	cache.Delete("second")
-	cache.DeleteExpired()
-	cache.DeleteAll()
+	cache.Delete(ctx, "second")
+	cache.DeleteExpired(ctx)
+	cache.DeleteAll(ctx)
 }
 ```
 
-To subscribe to insertion and eviction events, `cache.OnInsertion()` and 
+To subscribe to insertion and eviction events, `cache.OnInsertion()` and
 `cache.OnEviction()` methods should be used:
 ```go
 func main() {
@@ -100,17 +99,18 @@ func main() {
 		ttlcache.WithCapacity[string, string](300),
 	)
 
-	cache.OnInsertion(func(item *ttlcache.Item[string, string]) {
+	cache.OnInsertion(func(ctx context.Context, item *ttlcache.Item[string, string]) {
 		fmt.Println(item.Value(), item.ExpiresAt())
 	})
-	cache.OnEviction(func(reason ttlcache.EvictionReason, item *ttlcache.Item[string, string]) {
+	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[string, string]) {
 		if reason == ttlcache.EvictionReasonCapacityReached {
 			fmt.Println(item.Key(), item.Value())
 		}
 	})
 
-	cache.Set("first", "value1", ttlcache.DefaultTTL)
-	cache.DeleteAll()
+	ctx := context.Background()
+	cache.Set(ctx, "first", "value1", ttlcache.DefaultTTL)
+	cache.DeleteAll(ctx)
 }
 ```
 
@@ -119,16 +119,16 @@ existing implementation of `ttlcache.Loader` can be used:
 ```go
 func main() {
 	loader := ttlcache.LoaderFunc[string, string](
-		func(c *ttlcache.Cache[string, string], key string) *ttlcache.Item[string, string] {
+		func(ctx context.Context, c *ttlcache.Cache[string, string], key string) *ttlcache.Item[string, string] {
 			// load from file/make an HTTP request
-			item := c.Set("key from file", "value from file")
+			item := c.Set(ctx, "key from file", "value from file", time.Minute)
 			return item
 		},
 	)
 	cache := ttlcache.New[string, string](
-		ttlcache.WithLoader[string, string](loader),
+		ttlcache.WithLoader[string, string](ttlcache.SingleFlightLoader(loader)),
 	)
 
-	item := cache.Get("key from file")
+	item := cache.Get(context.Background(), "key from file")
 }
 ```

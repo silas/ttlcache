@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
-	"golang.org/x/sync/singleflight"
 )
 
 func TestMain(m *testing.M) {
@@ -434,17 +433,19 @@ func Test_Cache_evict(t *testing.T) {
 }
 
 func Test_Cache_Set(t *testing.T) {
+	ctx := context.Background()
 	cache := prepCache(time.Hour, "test1", "test2", "test3")
-	item := cache.Set("hello", "value123", time.Minute)
+	item := cache.Set(ctx, "hello", "value123", time.Minute)
 	require.NotNil(t, item)
 	assert.Same(t, item, cache.items.values["hello"].Value)
 
-	item = cache.Set("test1", "value123", time.Minute)
+	item = cache.Set(ctx, "test1", "value123", time.Minute)
 	require.NotNil(t, item)
 	assert.Same(t, item, cache.items.values["test1"].Value)
 }
 
 func Test_Cache_Get(t *testing.T) {
+	ctx := context.Background()
 	const notFoundKey, foundKey = "notfound", "test1"
 	cc := map[string]struct {
 		Key            string
@@ -462,7 +463,7 @@ func Test_Cache_Get(t *testing.T) {
 		"Get with default loader that returns non nil value when item is not found": {
 			Key: notFoundKey,
 			DefaultOptions: options[string, string]{
-				loader: LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+				loader: LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 					return &Item[string, string]{key: "test"}
 				}),
 			},
@@ -474,7 +475,7 @@ func Test_Cache_Get(t *testing.T) {
 		"Get with default loader that returns nil value when item is not found": {
 			Key: notFoundKey,
 			DefaultOptions: options[string, string]{
-				loader: LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+				loader: LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 					return nil
 				}),
 			},
@@ -485,12 +486,12 @@ func Test_Cache_Get(t *testing.T) {
 		"Get with call loader that returns non nil value when item is not found": {
 			Key: notFoundKey,
 			DefaultOptions: options[string, string]{
-				loader: LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+				loader: LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 					return &Item[string, string]{key: "test"}
 				}),
 			},
 			CallOptions: []Option[string, string]{
-				WithLoader[string, string](LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+				WithLoader[string, string](LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 					return &Item[string, string]{key: "hello"}
 				})),
 			},
@@ -502,12 +503,12 @@ func Test_Cache_Get(t *testing.T) {
 		"Get with call loader that returns nil value when item is not found": {
 			Key: notFoundKey,
 			DefaultOptions: options[string, string]{
-				loader: LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+				loader: LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 					return &Item[string, string]{key: "test"}
 				}),
 			},
 			CallOptions: []Option[string, string]{
-				WithLoader[string, string](LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+				WithLoader[string, string](LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 					return nil
 				})),
 			},
@@ -551,7 +552,7 @@ func Test_Cache_Get(t *testing.T) {
 			oldExpiresAt := cache.items.values[foundKey].Value.(*Item[string, string]).expiresAt
 			cache.options = c.DefaultOptions
 
-			res := cache.Get(c.Key, c.CallOptions...)
+			res := cache.Get(ctx, c.Key, c.CallOptions...)
 
 			if c.Key == foundKey {
 				c.Result = cache.items.values[foundKey].Value.(*Item[string, string])
@@ -580,6 +581,7 @@ func Test_Cache_Get(t *testing.T) {
 func Test_Cache_Delete(t *testing.T) {
 	var fnsCalls int
 
+	ctx := context.Background()
 	cache := prepCache(time.Hour, "1", "2", "3", "4")
 	cache.events.eviction.fns[1] = func(r EvictionReason, item *Item[string, string]) {
 		assert.Equal(t, EvictionReasonDeleted, r)
@@ -588,12 +590,12 @@ func Test_Cache_Delete(t *testing.T) {
 	cache.events.eviction.fns[2] = cache.events.eviction.fns[1]
 
 	// not found
-	cache.Delete("1234")
+	cache.Delete(ctx, "1234")
 	assert.Zero(t, fnsCalls)
 	assert.Len(t, cache.items.values, 4)
 
 	// success
-	cache.Delete("1")
+	cache.Delete(ctx, "1")
 	assert.Equal(t, 2, fnsCalls)
 	assert.Len(t, cache.items.values, 3)
 	assert.NotContains(t, cache.items.values, "1")
@@ -607,6 +609,7 @@ func Test_Cache_DeleteAll(t *testing.T) {
 		key4FnsCalls int
 	)
 
+	ctx := context.Background()
 	cache := prepCache(time.Hour, "1", "2", "3", "4")
 	cache.events.eviction.fns[1] = func(r EvictionReason, item *Item[string, string]) {
 		assert.Equal(t, EvictionReasonDeleted, r)
@@ -623,7 +626,7 @@ func Test_Cache_DeleteAll(t *testing.T) {
 	}
 	cache.events.eviction.fns[2] = cache.events.eviction.fns[1]
 
-	cache.DeleteAll()
+	cache.DeleteAll(ctx)
 	assert.Empty(t, cache.items.values)
 	assert.Equal(t, 2, key1FnsCalls)
 	assert.Equal(t, 2, key2FnsCalls)
@@ -637,6 +640,7 @@ func Test_Cache_DeleteExpired(t *testing.T) {
 		key2FnsCalls int
 	)
 
+	ctx := context.Background()
 	cache := prepCache(time.Hour)
 	cache.events.eviction.fns[1] = func(r EvictionReason, item *Item[string, string]) {
 		assert.Equal(t, EvictionReasonExpired, r)
@@ -652,7 +656,7 @@ func Test_Cache_DeleteExpired(t *testing.T) {
 	// one item
 	addToCache(cache, time.Nanosecond, "5")
 
-	cache.DeleteExpired()
+	cache.DeleteExpired(ctx)
 	assert.Empty(t, cache.items.values)
 	assert.NotContains(t, cache.items.values, "5")
 	assert.Equal(t, 2, key1FnsCalls)
@@ -660,7 +664,7 @@ func Test_Cache_DeleteExpired(t *testing.T) {
 	key1FnsCalls = 0
 
 	// empty
-	cache.DeleteExpired()
+	cache.DeleteExpired(ctx)
 	assert.Empty(t, cache.items.values)
 
 	// non empty
@@ -669,7 +673,7 @@ func Test_Cache_DeleteExpired(t *testing.T) {
 	addToCache(cache, time.Nanosecond, "6") // we need multiple calls to avoid adding time.Minute to ttl
 	time.Sleep(time.Millisecond)            // force expiration
 
-	cache.DeleteExpired()
+	cache.DeleteExpired(ctx)
 	assert.Len(t, cache.items.values, 4)
 	assert.NotContains(t, cache.items.values, "5")
 	assert.NotContains(t, cache.items.values, "6")
@@ -678,10 +682,11 @@ func Test_Cache_DeleteExpired(t *testing.T) {
 }
 
 func Test_Cache_Touch(t *testing.T) {
+	ctx := context.Background()
 	cache := prepCache(time.Hour, "1", "2")
 	oldExpiresAt := cache.items.values["1"].Value.(*Item[string, string]).expiresAt
 
-	cache.Touch("1")
+	cache.Touch(ctx, "1")
 
 	newExpiresAt := cache.items.values["1"].Value.(*Item[string, string]).expiresAt
 	assert.True(t, newExpiresAt.After(oldExpiresAt))
@@ -754,14 +759,14 @@ func Test_Cache_Start(t *testing.T) {
 	}
 	cache.events.eviction.fns[1] = fn
 
-	cache.Start()
+	cache.Start(context.Background())
 }
 
 func Test_Cache_Stop(t *testing.T) {
 	cache := Cache[string, string]{
 		stopCh: make(chan struct{}, 1),
 	}
-	cache.Stop()
+	cache.Stop(context.Background())
 	assert.Len(t, cache.stopCh, 1)
 }
 
@@ -936,16 +941,16 @@ func Test_Cache_OnEviction(t *testing.T) {
 func Test_LoaderFunc_Load(t *testing.T) {
 	var called bool
 
-	fn := LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+	fn := LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 		called = true
 		return nil
 	})
 
-	assert.Nil(t, fn(nil, ""))
+	assert.Nil(t, fn(context.Background(), nil, ""))
 	assert.True(t, called)
 }
 
-func Test_SuppressedLoader_Load(t *testing.T) {
+func Test_SingleFlightLoader_Load(t *testing.T) {
 	var (
 		mu        sync.Mutex
 		loadCalls int
@@ -953,8 +958,8 @@ func Test_SuppressedLoader_Load(t *testing.T) {
 		res       *Item[string, string]
 	)
 
-	l := SuppressedLoader[string, string]{
-		Loader: LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+	l := SingleFlightLoader[string, string](
+		LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 			mu.Lock()
 			loadCalls++
 			mu.Unlock()
@@ -969,26 +974,26 @@ func Test_SuppressedLoader_Load(t *testing.T) {
 
 			return &res1
 		}),
-		group: &singleflight.Group{},
-	}
+	)
 
 	var (
 		wg           sync.WaitGroup
 		item1, item2 *Item[string, string]
 	)
 
+	ctx := context.Background()
 	cache := prepCache(time.Hour)
 
 	// nil result
 	wg.Add(2)
 
 	go func() {
-		item1 = l.Load(cache, "test")
+		item1 = l.Load(ctx, cache, "test")
 		wg.Done()
 	}()
 
 	go func() {
-		item2 = l.Load(cache, "test")
+		item2 = l.Load(ctx, cache, "test")
 		wg.Done()
 	}()
 
@@ -1006,12 +1011,12 @@ func Test_SuppressedLoader_Load(t *testing.T) {
 	wg.Add(2)
 
 	go func() {
-		item1 = l.Load(cache, "test")
+		item1 = l.Load(ctx, cache, "test")
 		wg.Done()
 	}()
 
 	go func() {
-		item2 = l.Load(cache, "test")
+		item2 = l.Load(ctx, cache, "test")
 		wg.Done()
 	}()
 

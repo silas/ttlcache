@@ -1,6 +1,7 @@
 package ttlcache
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func Test_WithTTL(t *testing.T) {
 func Test_WithLoader(t *testing.T) {
 	var opts options[string, string]
 
-	l := LoaderFunc[string, string](func(_ *Cache[string, string], _ string) *Item[string, string] {
+	l := LoaderFunc[string, string](func(_ context.Context, _ *Cache[string, string], _ string) *Item[string, string] {
 		return nil
 	})
 	WithLoader[string, string](l).apply(&opts)
