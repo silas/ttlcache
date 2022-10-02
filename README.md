@@ -118,15 +118,16 @@ To load data when the cache does not have it, a custom or
 existing implementation of `ttlcache.Loader` can be used:
 ```go
 func main() {
-	loader := ttlcache.LoaderFunc[string, string](
+	var loader ttlcache.Loader[string, string] = ttlcache.LoaderFunc[string, string](
 		func(ctx context.Context, c *ttlcache.Cache[string, string], key string) *ttlcache.Item[string, string] {
 			// load from file/make an HTTP request
 			item := c.Set(ctx, "key from file", "value from file", time.Minute)
 			return item
 		},
 	)
+	loader = ttlcache.SingleFlightLoader(loader)
 	cache := ttlcache.New[string, string](
-		ttlcache.WithLoader[string, string](ttlcache.SingleFlightLoader(loader)),
+		ttlcache.WithLoader[string, string](loader),
 	)
 
 	item := cache.Get(context.Background(), "key from file")
