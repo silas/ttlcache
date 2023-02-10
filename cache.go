@@ -257,10 +257,10 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K, opts ...Option[K, V]) *Ite
 	applyOptions(&getOpts, opts...)
 
 	c.items.mu.Lock()
-	elem := c.get(key, !getOpts.disableTouchOnHit)
+	elem := c.get(key, !getOpts.disableTouchOnHit && !getOpts.noCache)
 	c.items.mu.Unlock()
 
-	if elem == nil {
+	if elem == nil || getOpts.noCache {
 		c.metricsMu.Lock()
 		c.metrics.Misses++
 		c.metricsMu.Unlock()
