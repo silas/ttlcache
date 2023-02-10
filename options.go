@@ -21,6 +21,7 @@ type options[K comparable, V any] struct {
 	ttl               time.Duration
 	loader            Loader[K, V]
 	disableTouchOnHit bool
+	noCache           bool
 }
 
 // applyOptions applies the provided option values to the option struct.
@@ -47,7 +48,7 @@ func WithTTL[K comparable, V any](ttl time.Duration) Option[K, V] {
 }
 
 // WithLoader sets the loader of the cache.
-// When passing into Get(), it sets an epheral loader that
+// When passing into Get(), it sets an ephemeral loader that
 // is used instead of the cache's default one.
 func WithLoader[K comparable, V any](l Loader[K, V]) Option[K, V] {
 	return optionFunc[K, V](func(opts *options[K, V]) {
@@ -63,5 +64,13 @@ func WithLoader[K comparable, V any](l Loader[K, V]) Option[K, V] {
 func WithDisableTouchOnHit[K comparable, V any]() Option[K, V] {
 	return optionFunc[K, V](func(opts *options[K, V]) {
 		opts.disableTouchOnHit = true
+	})
+}
+
+// WithNoCache disables the cache.
+// This should generally only be used with Get().
+func WithNoCache[K comparable, V any]() Option[K, V] {
+	return optionFunc[K, V](func(opts *options[K, V]) {
+		opts.noCache = true
 	})
 }

@@ -578,6 +578,32 @@ func Test_Cache_Get(t *testing.T) {
 	}
 }
 
+func Test_Cache_Get_NoCache(t *testing.T) {
+	ctx := context.Background()
+	key := "test"
+	refreshValue := "new-value"
+	cache := prepCache(time.Minute, key)
+
+	loader := WithLoader[string, string](LoaderFunc[string, string](func(ctx context.Context, c *Cache[string, string], key string) *Item[string, string] {
+		item := &Item[string, string]{key: key, value: refreshValue}
+		c.Set(ctx, item.key, item.value, time.Minute)
+		return item
+	}))
+
+	res := cache.Get(ctx, key, loader)
+	assert.Equal(t, "value oftest", res.value)
+	assert.Equal(t, Metrics{
+		Hits: 1,
+	}, cache.metrics)
+
+	res = cache.Get(ctx, key, loader, WithNoCache[string, string]())
+	assert.Equal(t, refreshValue, res.value)
+	assert.Equal(t, Metrics{
+		Hits:   1,
+		Misses: 1,
+	}, cache.metrics)
+}
+
 func Test_Cache_Delete(t *testing.T) {
 	var fnsCalls int
 
